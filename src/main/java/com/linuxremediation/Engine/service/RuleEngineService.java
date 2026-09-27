@@ -1,8 +1,7 @@
 package com.linuxremediation.Engine.service;
 
 import com.linuxremediation.Engine.domain.RemediationReport;
-import com.linuxremediation.Engine.domain.Server;
-import com.linuxremediation.Engine.dto.AlertPayloadDTO;
+import com.linuxremediation.Engine.dto.RemediationContext;
 import com.linuxremediation.Engine.strategy.RemediationStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,15 +21,15 @@ public class RuleEngineService {
                 .toList();
     }
 
-    public RemediationReport executeRemediation(AlertPayloadDTO alert, Server server, SSHExecutionService sshService) {
-        log.info("Finding matching Strategy for alert [{}] on server [{}] with IP [{}]", alert.getAlertName(), server.getHostname(), server.getIpAddress());
+    public RemediationReport executeRemediation(RemediationContext context) {
+        log.info("Finding matching Strategy for alert [{}] on server [{}] with IP [{}]", context.getAlertPayloadDTO().getAlertName(), context.getServer().getHostname(), context.getServer().getIpAddress());
 
         RemediationStrategy remediationStrategy = strategies.stream()
-                .filter(s -> s.supports(alert))
+                .filter(s -> s.supports(context.getAlertPayloadDTO()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("Alert not supported"));
 
         log.info("Executing strategy [{}]", remediationStrategy.getClass().getSimpleName());
-        return remediationStrategy.service(alert, server, sshService);
+        return remediationStrategy.service(context);
     }
 }

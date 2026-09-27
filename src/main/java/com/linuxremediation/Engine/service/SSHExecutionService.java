@@ -1,7 +1,9 @@
 package com.linuxremediation.Engine.service;
 
+import com.linuxremediation.Engine.domain.Incident;
 import com.linuxremediation.Engine.domain.Server;
 import com.linuxremediation.Engine.dto.CommandResultDTO;
+import lombok.RequiredArgsConstructor;
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.connection.channel.direct.Session;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
@@ -12,11 +14,15 @@ import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 @Service
+@RequiredArgsConstructor
 public class SSHExecutionService {
 
     private static final int COMMAND_TIMEOUT = 10;
+    private final AuditLoggingService auditLoggingService;
 
-    public CommandResultDTO executeCommand(Server server, String command) {
+    public CommandResultDTO executeCommand(Incident incident, Server server, String command) {
+        CommandResultDTO result = null;
+
         try (SSHClient sshClient = new SSHClient()) {
             sshClient.addHostKeyVerifier(new PromiscuousVerifier());
             sshClient.connect(server.getIpAddress(), server.getSshPort());
@@ -40,7 +46,7 @@ public class SSHExecutionService {
 
                 int exitCode = cmd.getExitStatus() != null ? cmd.getExitStatus() : -1;
 
-                return CommandResultDTO.builder()
+                result = CommandResultDTO.builder()
                         .command(command)
                         .exitCode(exitCode)
                         .stdout(stdOutStream.toString())
@@ -50,7 +56,7 @@ public class SSHExecutionService {
             }
         }
         catch (IOException e) {
-            return CommandResultDTO.builder()
+            result = CommandResultDTO.builder()
                         .command(command)
                         .exitCode(-1)
                         .stdout("")
@@ -58,5 +64,10 @@ public class SSHExecutionService {
                         .success(false)
                         .build();
         }
+        finally {
+            if(incident != null && result != null)
+                auditLoggingService.logExecution(incident, result);
+        }
+        return result;
     }
 }

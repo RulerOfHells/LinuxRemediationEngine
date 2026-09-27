@@ -40,6 +40,7 @@ public class Incident {
     private String rawReportJson;
 
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
     private LocalDateTime resolvedAt;
 
     @PrePersist

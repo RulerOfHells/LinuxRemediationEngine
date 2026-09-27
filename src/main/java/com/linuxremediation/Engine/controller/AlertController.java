@@ -1,6 +1,7 @@
 package com.linuxremediation.Engine.controller;
 
 import com.linuxremediation.Engine.domain.Incident;
+import com.linuxremediation.Engine.domain.RemediationReport;
 import com.linuxremediation.Engine.dto.AlertPayloadDTO;
 import com.linuxremediation.Engine.dto.SnowIncidentPayloadDTO;
 import com.linuxremediation.Engine.mapper.AlertMapper;
@@ -11,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -24,12 +26,25 @@ public class AlertController {
     private final AlertMapper alertMapper;
     private final IncidentHandlerService incidentHandlerService;
     private final IncidentRepository incidentRepository;
+    private final ObjectMapper objectMapper;
 
     @GetMapping
     public ResponseEntity<List<Incident>> getAllIncidents() {
         return ResponseEntity.ok(incidentRepository.findAll());
     }
 
+    @GetMapping("{alertId}/report")
+    public ResponseEntity<RemediationReport> getRemediationReport(@PathVariable String alertId) {
+        Incident incident = incidentRepository.findByAlertId(alertId).orElseThrow(() -> new IllegalArgumentException("Incident not found for alert: " + alertId));
+        if(incident.getRawReportJson() == null || incident.getRawReportJson().isEmpty())
+            return ResponseEntity.noContent().build();
+        try {
+            RemediationReport report = objectMapper.readValue(incident.getRawReportJson(), RemediationReport.class);
+            return ResponseEntity.ok(report);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
     @ConditionalOnProperty(
             name = "remediationengine.incomingalert.snow-webhook.enabled",
             havingValue = "true",

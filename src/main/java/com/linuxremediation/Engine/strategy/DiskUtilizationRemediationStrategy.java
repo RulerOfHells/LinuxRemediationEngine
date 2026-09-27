@@ -4,11 +4,15 @@ import com.linuxremediation.Engine.domain.RemediationReport;
 import com.linuxremediation.Engine.domain.Server;
 import com.linuxremediation.Engine.dto.AlertPayloadDTO;
 import com.linuxremediation.Engine.dto.CommandResultDTO;
-import com.linuxremediation.Engine.service.SSHExecutionService;
+import com.linuxremediation.Engine.dto.RemediationContext;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Optional;
+
+import static com.linuxremediation.Engine.domain.RemediationReport.OutcomeStatus.AUTOMATIC_RESOLVED;
+import static com.linuxremediation.Engine.domain.RemediationReport.OutcomeStatus.FAILED;
 
 @Component
 public class DiskUtilizationRemediationStrategy implements RemediationStrategy {
@@ -21,7 +25,9 @@ public class DiskUtilizationRemediationStrategy implements RemediationStrategy {
     }
 
     @Override
-    public RemediationReport service(AlertPayloadDTO alert, Server server, SSHExecutionService sshService) {
+    public RemediationReport service(RemediationContext context) {
+        AlertPayloadDTO alert = context.getAlertPayloadDTO();
+        Server server = context.getServer();
         String mountPoint = alert.getMetadata() != null ? alert.getMetadata().getOrDefault("mountPoint", "/var/log") : "/var/log";
 
         RemediationReport report = RemediationReport.builder()
@@ -33,11 +39,11 @@ public class DiskUtilizationRemediationStrategy implements RemediationStrategy {
                 .build();
 
         // 1. Initial Diagnostic: Inspect Filesystem Usage
-        CommandResultDTO dfResult = sshService.executeCommand(server, "df -Th " + mountPoint);
+        CommandResultDTO dfResult = context.executeCommand("df -Th " + mountPoint);
         addTimelineStep(report, "DIAGNOSTIC_DF", dfResult);
 
         // 2. Identify Top Space Consumers
-        CommandResultDTO duResult = sshService.executeCommand(server, "du -xhd1 " + mountPoint + " 2>/dev/null | sort -hr | head -n 10");
+        CommandResultDTO duResult = context.executeCommand("du -xhd1 " + mountPoint + "/* 2>/dev/null | sort -hr | head -n 10");
         addTimelineStep(report, "DIAGNOSTIC_DU", duResult);
 
         // Build CSV Artifact of top usage for engineers
@@ -86,15 +92,22 @@ public class DiskUtilizationRemediationStrategy implements RemediationStrategy {
 
         } else {
             // IN LINUX OS SCOPE (/var/log, /tmp, /var/cache) -> Attempt Automated Remediation
-            CommandResultDTO cleanupResult = sshService.executeCommand(
-                    server, "sudo journalctl --vacuum-size=200M && sudo logrotate -f /etc/logrotate.conf 2>/dev/null");
-            addTimelineStep(report, "REMEDIATION_LOGROTATE", cleanupResult);
+            CommandResultDTO basicCleanupResult = context.executeCommand(
+                    "journalctl --vacuum-size=200M && dnf clean all"
+            );
+            addTimelineStep(report, "REMEDIATION_BASIC_CLEANUP", basicCleanupResult);
+
+            CommandResultDTO logrotateResult = context.executeCommand(
+                    "sudo logrotate -f /etc/logrotate.conf 2>/dev/null");
+            addTimelineStep(report, "REMEDIATION_LOGROTATE", logrotateResult);
 
             // Re-verify space after remediation
-            CommandResultDTO postVerifyResult = sshService.executeCommand(server, "df -Th " + mountPoint);
+            CommandResultDTO postVerifyResult = context.executeCommand("df -Th " + mountPoint);
             addTimelineStep(report, "POST_VERIFICATION_DF", postVerifyResult);
 
-            report.setOutcome(RemediationReport.OutcomeStatus.AUTOMATIC_RESOLVED);
+            Optional<Integer> use = getAvailableSpace(postVerifyResult.getStdout());
+
+            report.setOutcome((use.isPresent() && use.get() > 85)? FAILED : AUTOMATIC_RESOLVED);
             report.setSummary("Automated log cleanup executed successfully on OS mount [" + mountPoint + "].");
             report.setDetailedAnalysis("""
                     ### Automated Action Taken:
@@ -132,5 +145,14 @@ public class DiskUtilizationRemediationStrategy implements RemediationStrategy {
             }
         }
         return csv.toString();
+    }
+
+    private Optional<Integer> getAvailableSpace(String result) {
+        String[] lines = result.split("\n");
+        for (String line : lines) {
+            if(line.contains("/"))
+                return Optional.of(Integer.parseInt(line.split("\\s+")[5].replace("%", "")));
+        }
+        return Optional.empty();
     }
 }
